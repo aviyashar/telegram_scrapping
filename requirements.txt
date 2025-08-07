@@ -1,0 +1,4 @@
+telethon
+google-cloud-bigquery
+python-dotenv
+loguru 
