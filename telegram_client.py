@@ -1,8 +1,15 @@
 from telethon import TelegramClient
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 from telethon.errors import SessionPasswordNeededError
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
+
+
+def parse_iso_datetime(dt_str):
+    dt = datetime.fromisoformat(dt_str)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def get_message_type(message):
@@ -45,27 +52,27 @@ def normalize_message(message, group_id):
         'replies': getattr(message, 'replies', None).replies if getattr(message, 'replies', None) else None,
         'forwards': getattr(message, 'forwards', None),
         'media_url': get_media_url(message),
-        'ingestion_time': datetime.utcnow().isoformat(),
+        'ingestion_time': datetime.now(timezone.utc).isoformat(),
     }
 
 
 async def fetch_messages_async(group_id, last_ts, from_time, to_time, config):
     api_id = int(config['TELEGRAM_API_ID'])
     api_hash = config['TELEGRAM_API_HASH']
-    bot_token = config['TELEGRAM_BOT_TOKEN']
     session_name = 'telegram_session'
     client = TelegramClient(session_name, api_id, api_hash)
-    await client.start(bot_token=bot_token)
+    # This will prompt for phone number and code on first run
+    await client.start()
     # Determine offset_date
     offset_date = None
     if from_time:
-        offset_date = datetime.fromisoformat(from_time)
+        offset_date = parse_iso_datetime(from_time)
     elif last_ts:
-        offset_date = datetime.fromisoformat(last_ts)
+        offset_date = parse_iso_datetime(last_ts)
     # Fetch messages
     messages = []
     async for message in client.iter_messages(entity=group_id, offset_date=offset_date, reverse=True):
-        if to_time and message.date > datetime.fromisoformat(to_time):
+        if to_time and message.date > parse_iso_datetime(to_time):
             continue
         messages.append(normalize_message(message, group_id))
     await client.disconnect()

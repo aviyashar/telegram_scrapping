@@ -2,3 +2,5 @@ telethon
 google-cloud-bigquery
 python-dotenv
 loguru 
+arabic-reshaper
+python-bidi
