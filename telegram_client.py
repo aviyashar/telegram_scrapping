@@ -1,8 +1,10 @@
-from telethon import TelegramClient
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
-from telethon.errors import SessionPasswordNeededError
-from datetime import datetime, timezone
 import asyncio
+
+# from telethon.errors import SessionPasswordNeededError
+from datetime import datetime, timezone
+
+from telethon import TelegramClient
+from telethon.tl.types import MessageMediaDocument, MessageMediaPhoto
 
 
 def parse_iso_datetime(dt_str):
@@ -84,4 +86,6 @@ def fetch_new_messages(group_id, last_ts, from_time, to_time, config):
     Fetch new messages from a Telegram group since last_ts (or from_time if provided).
     Returns a list of normalized message dicts.
     """
-    return asyncio.run(fetch_messages_async(group_id, last_ts, from_time, to_time, config)) 
+    return asyncio.run(
+        fetch_messages_async(group_id, last_ts, from_time, to_time, config)
+    )
