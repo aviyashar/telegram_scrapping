@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 from telethon import TelegramClient
-from telethon.errors import RPCError
+from telethon.errors import RPCError, FloodWaitError
 from telethon.tl.types import Channel, Chat, MessageMediaDocument, MessageMediaPhoto
 
 
@@ -21,23 +21,24 @@ async def is_eligible_for_scraping(client: TelegramClient, entity_id: str) -> bo
     """
     try:
         entity = await client.get_entity(entity_id)
+        print(f"Entity {entity_id}: {entity}")
 
         # Group chats (old style), supergroup or broadcast channel
         if isinstance(entity, Chat) or isinstance(entity, Channel):
-            print(
-                f"Entity {entity_id} is eligible for scraping (as a Group chat, supergroup or broadcast channel.)"
-            )
+            print(f"Entity {entity_id} is eligible for scraping.")
             return True
 
         # Fallback for unexpected types
-        print(f"Entity {entity_id} is NOT eligible for scraping.")
+        print(f"⚠ Entity {entity_id} is NOT eligible for scraping.")
         return False
-
+    except FloodWaitError as e:
+        print(f"⏳ Flood wait error for entity {entity_id}: {e}")
+        return False
     except RPCError as e:
-        print(f"Error fetching entity {entity_id}: {e}")
+        print(f"❌ Error fetching entity {entity_id}: {e}")
         return False
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"❌ Unexpected error: {e}")
         return False
 
 
@@ -370,7 +371,7 @@ async def update_metadata_from_telegram_urls(
             print("No telegram_url values found in messages table")
             return
 
-        print(f"Found {len(telegram_urls)} unique Telegram URLs: {telegram_urls}\n")
+        print(f"Found {len(telegram_urls)} unique Telegram URLs:\n{telegram_urls}\n")
 
         # Format URLs and filter valid ones
         formatted_urls = []
@@ -379,7 +380,7 @@ async def update_metadata_from_telegram_urls(
             if formatted_url and formatted_url.startswith("https://t.me/"):
                 formatted_urls.append(formatted_url)
 
-        print(f"Formatted URLs: {formatted_urls}\n")
+        print(f"Formatted URLs:\n{formatted_urls}\n")
 
         # Get existing groups from metadata table
         existing_groups_query = f"""
@@ -388,12 +389,12 @@ async def update_metadata_from_telegram_urls(
         """
         existing_job = client.query(existing_groups_query)
         existing_groups = {row.group_id for row in existing_job.result()}
-        print(f"Existing groups in metadata table: {existing_groups}\n")
+        print(f"Existing groups in metadata table:\n{existing_groups}\n")
 
         # Find new groups to add
         new_groups = [url for url in formatted_urls if url not in existing_groups]
         print(
-            f"New groups to add to {project}.{dataset}.{metadata_table}: {new_groups}\n"
+            f"New groups to add to {project}.{dataset}.{metadata_table}:\n{new_groups}\n"
         )
 
         # Add new groups to metadata table using MERGE
@@ -403,7 +404,6 @@ async def update_metadata_from_telegram_urls(
 
         for group_id in new_groups:
             if not await is_eligible_for_scraping(telegramClient, group_id):
-                print(f"Skipping {group_id} - not eligible for scraping")
                 continue
 
             print(
@@ -429,31 +429,31 @@ async def update_metadata_from_telegram_urls(
 
             client.query(merge_query, job_config).result()
             print(
-                f"✅ Successfully added new group: {group_id} with is_first_time = true"
+                f"✅ Successfully added new group: {group_id} with is_first_time = true\n"
             )
 
         await telegramClient.disconnect()
         if new_groups:
             print(
-                f"🎉 Successfully added {len(new_groups)} new groups to {project}.{dataset}.{metadata_table}"
+                f"🎉 Successfully added {len(new_groups)} new groups to {project}.{dataset}.{metadata_table}\n"
             )
         else:
             print(
-                "ℹ️ No new groups to add - all Telegram URLs already exist in metadata table"
+                "ℹ️ No new groups to add - all Telegram URLs already exist in metadata table\n"
             )
 
     except Exception as e:
-        print(f"❌ Error updating metadata from telegram_urls: {e}")
+        print(f"❌ Error updating metadata from telegram_urls: {e}\n")
         raise
 
 
 def ingest_telegram_to_bq(
-    tg_entities_data: list[dict[str, str]],
+    tg_entities_data: list[dict[str, str | None]],
     bq_project: str,
     bq_dataset: str,
     bq_table: str = "telegram_messages",
-    bq_metadata_table: str = "telegram_last_ingestion",
-    telegram_config: dict[str, str] | None = None,
+    bq_metadata_table: str | None = "telegram_last_ingestion",
+    telegram_config: dict[str, str | None] | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
 ) -> int:
@@ -510,7 +510,7 @@ def ingest_telegram_to_bq(
     ensure_metadata_table(bg_client, bq_project, bq_dataset, bq_metadata_table)
     total_inserted = 0
     for entity in tg_entities_data:
-        print(f"\n\n Processing entity: {entity['id']}")
+        print(f"\n\nProcessing entity: {entity['id']}")
 
         try:
             print(
@@ -537,9 +537,10 @@ def ingest_telegram_to_bq(
                     if errors:
                         raise Exception(f"BigQuery insert errors: {errors}")
                     total_inserted += len(new_messages)
-                    print(f"Inserted {len(new_messages)} messages for {entity['id']}")
+                    print(
+                        f"✅ Inserted {len(new_messages)} messages for {entity['id']}"
+                    )
                 # Update metadata regardless of whether new messages were inserted
-                # TODO: fails here
                 update_metadata(
                     bg_client,
                     bq_project,

@@ -21,10 +21,9 @@ def parse_args():
 
 
 # Task List:
-# TEST: Identify Telegram Channels using Channel details - make sure this is not a user or another Telegram element
-# TEST: Allow collecting data from the last three years.
-# TEST: Make sure to collect data only from the last Ingestion - not from the all period if not needed (less processing, less duplications).
-
+# Identify Telegram Channels using Channel details - make sure this is not a user or another Telegram element
+# Allow collecting data from the last three years.
+# Make sure to collect data only from the last Ingestion - not from the all period if not needed (less processing, less duplications).
 # TODO: Collect data from the Channels added in the current session
 # TODO: build a container and deploy to Cloud Run
 
@@ -74,8 +73,6 @@ def main(from_date: str | None = None, to_date: str | None = None):
     logger.info(
         "Pipeline will: Fetch new messages → Check duplicates → Insert only new messages → Update metadata"
     )
-
-    # --------------------------------------
 
     try:
         total_inserted = ingest_telegram_to_bq(
