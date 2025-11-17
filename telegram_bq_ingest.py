@@ -427,6 +427,8 @@ async def update_metadata_from_telegram_urls(
 
         # Add new groups to metadata table using MERGE
         current_time = datetime.now(timezone.utc)
+        if telegram_config is None:
+            raise ValueError("telegram_config is required for checking entities")
         telegramClient = initTelegramClient(telegram_config, "entity_checking_session")
         await telegramClient.start()
 
