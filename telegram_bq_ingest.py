@@ -429,7 +429,8 @@ async def update_metadata_from_telegram_urls(
         current_time = datetime.now(timezone.utc)
         if telegram_config is None:
             raise ValueError("telegram_config is required for checking entities")
-        telegramClient = initTelegramClient(telegram_config, "entity_checking_session")
+        # Store session files in a dedicated directory to avoid conflicts and accidental commits.
+        telegramClient = initTelegramClient(telegram_config, os.path.join("telegram_sessions", "entity_checking_session"))
         await telegramClient.start()
 
         for group_id in new_groups:
