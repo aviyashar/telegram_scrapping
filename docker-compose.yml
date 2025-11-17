@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  telegram-scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-scraper
+    restart: unless-stopped
+
+    # Environment variables (you should create a .env file)
+    env_file:
+      - .env
+
+    # Mount volumes for persistent data
+    volumes:
+      # Session files persistence
+      - ./sessions:/app/sessions
+      # Logs persistence
+      - ./logs:/app/logs
+      # Google Cloud credentials (if using service account file)
+      - ${GOOGLE_APPLICATION_CREDENTIALS:-./credentials.json}:/app/credentials.json:ro
+
+    # Set environment for credentials path
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+    # Network configuration
+    networks:
+      - telegram-net
+
+networks:
+  telegram-net:
+    driver: bridge
