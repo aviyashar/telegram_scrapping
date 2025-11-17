@@ -2,16 +2,30 @@ import asyncio
 import os
 import re
 from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable
 
 from dotenv import load_dotenv
 from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 from telethon import TelegramClient
-from telethon.errors import RPCError, FloodWaitError
+from telethon.errors import FloodWaitError, RPCError
 from telethon.tl.types import Channel, Chat, MessageMediaDocument, MessageMediaPhoto
 
 
-async def is_eligible_for_scraping(client: TelegramClient, entity_id: str) -> bool:
+async def retry_on_flood(
+    func: Callable[..., Awaitable[Any]], *args: Any, **kwargs: Any
+) -> Any:
+    while True:
+        try:
+            return await func(*args, **kwargs)
+        except FloodWaitError as e:
+            print(f"Waiting {e.seconds} seconds...")
+            await asyncio.sleep(e.seconds)
+
+
+async def is_eligible_for_scraping(
+    client: TelegramClient, entity_id: str
+) -> bool | None:
     """
     Check if the given Telegram entity should be scraped.
 
@@ -21,7 +35,6 @@ async def is_eligible_for_scraping(client: TelegramClient, entity_id: str) -> bo
     """
     try:
         entity = await client.get_entity(entity_id)
-        print(f"Entity {entity_id}: {entity}")
 
         # Group chats (old style), supergroup or broadcast channel
         if isinstance(entity, Chat) or isinstance(entity, Channel):
@@ -32,8 +45,11 @@ async def is_eligible_for_scraping(client: TelegramClient, entity_id: str) -> bo
         print(f"⚠ Entity {entity_id} is NOT eligible for scraping.")
         return False
     except FloodWaitError as e:
-        print(f"⏳ Flood wait error for entity {entity_id}: {e}")
-        return False
+        print(f"⏳ Flood wait error: {e}")
+        await asyncio.sleep(e.seconds)
+        await retry_on_flood(
+            func=is_eligible_for_scraping, client=client, entity_id=entity_id
+        )
     except RPCError as e:
         print(f"❌ Error fetching entity {entity_id}: {e}")
         return False
@@ -154,7 +170,6 @@ async def fetch_messages_async(
     await client.start()
 
     if not await is_eligible_for_scraping(client, group_id):
-        print(f"--> Skipping entity {group_id} as it is not a valid Group/Channel.")
         await client.disconnect()
         return []
 
@@ -172,13 +187,26 @@ async def fetch_messages_async(
         offset_date = datetime.fromisoformat(last_ts)
 
     messages = []
-    async for message in client.iter_messages(
-        entity=group_id, offset_date=offset_date, reverse=True
-    ):
-        # Filter by to_date if provided
-        if to_date and message.date > datetime.fromisoformat(to_date):
-            continue
-        messages.append(normalize_message(message, group_id))
+    try:
+        async for message in client.iter_messages(
+            entity=group_id, offset_date=offset_date, reverse=True
+        ):
+            # Filter by to_date if provided
+            if to_date and message.date > datetime.fromisoformat(to_date):
+                continue
+            messages.append(normalize_message(message, group_id))
+    except FloodWaitError as e:
+        print(f"⏳ Flood wait error while fetching messages: {e}")
+        await asyncio.sleep(e.seconds)
+        await retry_on_flood(
+            func=fetch_messages_async,
+            group_id=group_id,
+            last_ts=last_ts,
+            from_date=from_date,
+            to_date=to_date,
+            telegram_config=telegram_config,
+        )
+        await client.disconnect()
     await client.disconnect()
     return messages
 
@@ -432,6 +460,20 @@ async def update_metadata_from_telegram_urls(
                 f"✅ Successfully added new group: {group_id} with is_first_time = true\n"
             )
 
+            # Fetch some initial messages to avoid empty groups
+            messages = await fetch_messages_async(
+                group_id,
+                None,
+                None,
+                None,
+                telegram_config,
+            )
+            print(f"Fetched {len(messages)} messages from {group_id}")
+            if messages:
+                handle_new_messages(
+                    messages, group_id, client, project, dataset, messages_table
+                )
+
         await telegramClient.disconnect()
         if new_groups:
             print(
@@ -445,6 +487,30 @@ async def update_metadata_from_telegram_urls(
     except Exception as e:
         print(f"❌ Error updating metadata from telegram_urls: {e}\n")
         raise
+
+
+def handle_new_messages(
+    messages: list[dict[str, str | int | list[str] | None]],
+    entity_id: str,
+    bg_client: bigquery.Client,
+    bq_project: str,
+    bq_dataset: str,
+    bq_table: str,
+) -> int:
+    """Handle insertion of new messages into BigQuery after duplicate check."""
+    new_messages = check_duplicates(
+        bg_client, bq_project, bq_dataset, bq_table, messages
+    )
+    print(f"Found {len(new_messages)} new messages (after duplicate check)")
+    if new_messages:
+        table_id = f"{bq_project}.{bq_dataset}.{bq_table}"
+        errors = bg_client.insert_rows_json(table_id, new_messages)
+        if errors:
+            raise Exception(f"BigQuery insert errors: {errors}")
+        print(f"✅ Inserted {len(new_messages)} messages for {entity_id}")
+
+        return len(new_messages)
+    return 0
 
 
 def ingest_telegram_to_bq(
@@ -527,19 +593,11 @@ def ingest_telegram_to_bq(
             )
             print(f"Fetched {len(messages)} messages from {entity['id']}")
             if messages:
-                new_messages = check_duplicates(
-                    bg_client, bq_project, bq_dataset, bq_table, messages
+                inserted = handle_new_messages(
+                    messages, entity["id"], bg_client, bq_project, bq_dataset, bq_table
                 )
-                print(f"Found {len(new_messages)} new messages (after duplicate check)")
-                if new_messages:
-                    table_id = f"{bq_project}.{bq_dataset}.{bq_table}"
-                    errors = bg_client.insert_rows_json(table_id, new_messages)
-                    if errors:
-                        raise Exception(f"BigQuery insert errors: {errors}")
-                    total_inserted += len(new_messages)
-                    print(
-                        f"✅ Inserted {len(new_messages)} messages for {entity['id']}"
-                    )
+                total_inserted += inserted
+
                 # Update metadata regardless of whether new messages were inserted
                 update_metadata(
                     bg_client,
