@@ -166,6 +166,8 @@ async def fetch_messages_async(
     telegram_config: dict[str, str] | None = None,
 ) -> list[dict[str, str | int | list[str] | None]]:
     """Fetch messages from Telegram group within date range or since last timestamp."""
+    if telegram_config is None:
+        raise ValueError("telegram_config is required")
     client = initTelegramClient(telegram_config, "fetch_session")
     await client.start()
 
