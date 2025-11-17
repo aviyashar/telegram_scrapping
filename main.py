@@ -29,9 +29,12 @@ def main(from_date: str | None = None, to_date: str | None = None):
     bq_table = config.get("BQ_TABLE", "telegram_messages")
     bq_metadata_table = config.get("BQ_METADATA_TABLE", "telegram_last_ingestion")
 
-    if not bq_project or not bq_dataset or not bq_table:
+    if (
+        bq_project is None or bq_dataset is None or bq_table is None or
+        bq_project == "your-gcp-project-id" or bq_dataset == "your_dataset" or bq_table == "telegram_messages"
+    ):
         logger.error(
-            "Missing required BigQuery configuration: BQ_PROJECT_ID, BQ_DATASET, or BQ_TABLE"
+            "BigQuery configuration not properly set. Please update config with actual values for BQ_PROJECT_ID, BQ_DATASET, and BQ_TABLE."
         )
         return
 
