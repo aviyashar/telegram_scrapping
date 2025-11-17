@@ -101,3 +101,6 @@ bq_credentials.json
 # Telegram session files (if not already covered)
 *.session-wal
 *.session
+
+# Snyk Security Extension - AI Rules (auto-generated)
+.github/instructions/snyk_rules.instructions.md
