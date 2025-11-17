@@ -20,14 +20,6 @@ def parse_args():
     return parser.parse_args()
 
 
-# Task List:
-# Identify Telegram Channels using Channel details - make sure this is not a user or another Telegram element
-# Allow collecting data from the last three years.
-# Make sure to collect data only from the last Ingestion - not from the all period if not needed (less processing, less duplications).
-# TODO: Collect data from the Channels added in the current session
-# TODO: build a container and deploy to Cloud Run
-
-
 def main(from_date: str | None = None, to_date: str | None = None):
     config = load_config()
 
