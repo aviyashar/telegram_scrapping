@@ -169,7 +169,11 @@ async def fetch_messages_async(
     if telegram_config is None:
         raise ValueError("telegram_config is required")
     client = initTelegramClient(telegram_config, "fetch_session")
-    await client.start()
+    bot_token = telegram_config.get("TELEGRAM_BOT_TOKEN")
+    if bot_token:
+        await client.start(bot_token=bot_token)
+    else:
+        await client.start()
 
     if not await is_eligible_for_scraping(client, group_id):
         await client.disconnect()
@@ -431,9 +435,13 @@ async def update_metadata_from_telegram_urls(
         current_time = datetime.now(timezone.utc)
         if telegram_config is None:
             raise ValueError("telegram_config is required for checking entities")
-        # Store session files in a dedicated directory to avoid conflicts and accidental commits.
-        telegramClient = initTelegramClient(telegram_config, os.path.join("telegram_sessions", "entity_checking_session"))
-        await telegramClient.start()
+        # Reuse the same session file as the main fetch to avoid re-authentication
+        telegramClient = initTelegramClient(telegram_config, "fetch_session")
+        bot_token = telegram_config.get("TELEGRAM_BOT_TOKEN")
+        if bot_token:
+            await telegramClient.start(bot_token=bot_token)
+        else:
+            await telegramClient.start()
 
         for group_id in new_groups:
             if not await is_eligible_for_scraping(telegramClient, group_id):
@@ -518,6 +526,88 @@ def handle_new_messages(
     return 0
 
 
+async def _ingest_telegram_to_bq_async(
+    tg_entities_data: list[dict[str, str | None]],
+    bq_project: str,
+    bq_dataset: str,
+    bq_table: str,
+    bq_metadata_table: str,
+    telegram_config: dict[str, str],
+    from_date: str | None,
+    to_date: str,
+    bg_client: bigquery.Client,
+) -> int:
+    """Async implementation that uses a single Telegram client connection."""
+    api_id = int(telegram_config["TELEGRAM_API_ID"])
+    api_hash = telegram_config["TELEGRAM_API_HASH"]
+
+    client = TelegramClient('fetch_session', api_id, api_hash)
+    total_inserted = 0
+
+    async with client:
+        for entity in tg_entities_data:
+            group_id = entity['id']  # For storing in BQ
+            entity_link = entity.get('link', entity['id'])  # For accessing Telegram
+
+            print(f"\n\nProcessing entity: {entity_link} (ID: {group_id})")
+
+            try:
+                print(
+                    f"Fetching messages for {entity_link} from {from_date or entity['last_fetch_time'] or 'beginning'} to {to_date}"
+                )
+
+                # Check if eligible
+                if not await is_eligible_for_scraping(client, entity_link):
+                    continue
+
+                # Determine offset_date
+                offset_date = None
+                if from_date:
+                    if entity['last_fetch_time']:
+                        last_ts_dt = datetime.fromisoformat(entity['last_fetch_time'])
+                        from_date_dt = datetime.fromisoformat(from_date)
+                        offset_date = last_ts_dt if last_ts_dt > from_date_dt else from_date_dt
+                    else:
+                        offset_date = datetime.fromisoformat(from_date)
+                elif entity['last_fetch_time']:
+                    offset_date = datetime.fromisoformat(entity['last_fetch_time'])
+
+                # Fetch messages
+                messages = []
+                async for message in client.iter_messages(
+                    entity=entity_link, offset_date=offset_date, reverse=True
+                ):
+                    if to_date and message.date > datetime.fromisoformat(to_date):
+                        continue
+                    messages.append(normalize_message(message, group_id))  # Store group_id in BQ
+
+                print(f"Fetched {len(messages)} messages from {entity_link}")
+
+                if messages:
+                    inserted = handle_new_messages(
+                        messages, group_id, bg_client, bq_project, bq_dataset, bq_table
+                    )
+                    total_inserted += inserted
+
+                    update_metadata(
+                        bg_client,
+                        bq_project,
+                        bq_dataset,
+                        bq_metadata_table,
+                        group_id,
+                        messages,
+                    )
+            except FloodWaitError as e:
+                print(f"Flood wait error for {entity_link}: waiting {e.seconds} seconds...")
+                await asyncio.sleep(e.seconds)
+            except Exception as e:
+                print(f"Error processing entity {entity_link}: {e}")
+
+        print(f"\nTotal messages inserted: {total_inserted}")
+
+    return total_inserted
+
+
 def ingest_telegram_to_bq(
     tg_entities_data: list[dict[str, str | None]],
     bq_project: str,
@@ -530,16 +620,6 @@ def ingest_telegram_to_bq(
 ) -> int:
     """
     Ingests messages from Telegram groups into BigQuery with duplicate checks and metadata tracking.
-
-    Args:
-        group_ids: List of Telegram group IDs or links
-        bq_project: BigQuery project ID
-        bq_dataset: BigQuery dataset name
-        bq_table: BigQuery table name for messages
-        bq_metadata_table: BigQuery table name for metadata
-        telegram_config: Telegram API configuration dict
-        from_date: Start date in ISO format (if None, will use metadata table)
-        to_date: End date in ISO format (default: now)
     """
     load_dotenv()
     if telegram_config is None:
@@ -554,11 +634,8 @@ def ingest_telegram_to_bq(
             "TELEGRAM_API_HASH": api_hash,
         }
 
-    # Set default end date if not provided
     if to_date is None:
         to_date = datetime.now(timezone.utc).isoformat()
-
-    # print(f"Date range: {from_date or 'metadata table'} to {to_date}")
 
     bg_client = bigquery.Client(project=bq_project)
     schema = [
@@ -579,53 +656,19 @@ def ingest_telegram_to_bq(
     ]
     ensure_bq_table(bg_client, bq_project, bq_dataset, bq_table, schema)
     ensure_metadata_table(bg_client, bq_project, bq_dataset, bq_metadata_table)
-    total_inserted = 0
-    for entity in tg_entities_data:
-        print(f"\n\nProcessing entity: {entity['id']}")
 
-        try:
-            print(
-                f"Fetching messages for {entity['id']} from {from_date or entity['last_fetch_time'] or 'beginning'} to {to_date}"
-            )
-            messages = asyncio.run(
-                fetch_messages_async(
-                    entity["id"],
-                    entity["last_fetch_time"],
-                    from_date,
-                    to_date,
-                    telegram_config,
-                )
-            )
-            print(f"Fetched {len(messages)} messages from {entity['id']}")
-            if messages:
-                inserted = handle_new_messages(
-                    messages, entity["id"], bg_client, bq_project, bq_dataset, bq_table
-                )
-                total_inserted += inserted
-
-                # Update metadata regardless of whether new messages were inserted
-                update_metadata(
-                    bg_client,
-                    bq_project,
-                    bq_dataset,
-                    bq_metadata_table,
-                    entity["id"],
-                    messages,
-                )
-        except Exception as e:
-            print(f"Error processing entity {entity['id']}: {e}")
-    print(f"Total messages inserted: {total_inserted}")
-
-    # Update metadata table based on telegram_url values found in messages
-    print("\n\nUpdating metadata table based on telegram_url values...")
-    asyncio.run(
-        update_metadata_from_telegram_urls(
-            bg_client,
+    # Use a single asyncio.run with one client connection for all entities
+    total_inserted = asyncio.run(
+        _ingest_telegram_to_bq_async(
+            tg_entities_data,
             bq_project,
             bq_dataset,
             bq_table,
             bq_metadata_table,
             telegram_config,
+            from_date,
+            to_date,
+            bg_client,
         )
     )
 
