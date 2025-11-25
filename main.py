@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from bq_utils import get_entities_data_from_bq
-from config import load_config
+from config import load_config, validate_config
 from telegram_bq_ingest import ingest_telegram_to_bq
 
 
@@ -23,29 +23,26 @@ def parse_args():
 def main(from_date: str | None = None, to_date: str | None = None):
     config = load_config()
 
-    # BigQuery configuration
-    bq_project = config.get("BQ_PROJECT_ID", "your-gcp-project-id")
-    bq_dataset = config.get("BQ_DATASET", "your_dataset")
-    bq_table = config.get("BQ_TABLE", "telegram_messages")
-    bq_metadata_table = config.get("BQ_METADATA_TABLE", "telegram_last_ingestion")
-
-    if (
-        bq_project is None
-        or bq_dataset is None
-        or bq_table is None
-        or bq_project == "your-gcp-project-id"
-        or bq_dataset == "your_dataset"
-    ):
-        logger.error(
-            "BigQuery configuration not properly set. Please update config with actual values for BQ_PROJECT_ID, BQ_DATASET, and BQ_TABLE."
-        )
+    # Validate configuration
+    try:
+        validate_config(config)
+    except ValueError as e:
+        logger.error(f"Configuration error: {e}")
         return
 
-    # Fetch group IDs from BigQuery metadata table
-    tg_entities_data = get_entities_data_from_bq(bq_project, bq_dataset, bq_table)
+    # BigQuery configuration
+    bq_project = config["BQ_PROJECT_ID"]
+    bq_dataset = config["BQ_DATASET"]
+    bq_table = config["BQ_TABLE"]
+    bq_metadata_table = config["BQ_METADATA_TABLE"]
+    bq_groups_table = config["BQ_GROUPS_TABLE"]
+
+    # Fetch groups from BigQuery groups table
+    tg_entities_data = get_entities_data_from_bq(bq_project, bq_dataset, bq_groups_table)
     if not tg_entities_data:
         logger.error(
-            "No Telegram entities found in BigQuery. Please ensure the table exists and contains data."
+            f"No Telegram groups found in {bq_project}.{bq_dataset}.{bq_groups_table}. "
+            "Please ensure the table exists and contains groups with group_link values."
         )
         return
 
