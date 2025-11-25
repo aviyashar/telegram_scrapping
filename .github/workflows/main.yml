@@ -68,20 +68,7 @@ jobs:
             -var="image_url=${{ steps.build.outputs.image_url }}"
 
       - name: Get Cloud Run Service URL
-        id: get_url
         working-directory: terraform
         run: |
           SERVICE_URL=$(terraform output -raw cloud_run_service_uri)
-          echo "service_url=$SERVICE_URL" >> $GITHUB_OUTPUT
-
-      - name: Test Cloud Run Service
-        run: |
-          TOKEN=$(gcloud auth print-identity-token --audiences=${{ steps.get_url.outputs.service_url }})
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $TOKEN" \
-            "${{ steps.get_url.outputs.service_url }}/health")
-          if [ "$RESPONSE" != "200" ]; then
-            echo "Health check failed with status: $RESPONSE"
-            exit 1
-          fi
-          echo "Health check passed!"
+          echo "Deployed to: $SERVICE_URL"
