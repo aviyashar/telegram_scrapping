@@ -76,7 +76,7 @@ jobs:
 
       - name: Test Cloud Run Service
         run: |
-          TOKEN=$(gcloud auth print-identity-token --impersonate-service-account=${{ secrets.WIF_SERVICE_ACCOUNT }} --audiences=${{ steps.get_url.outputs.service_url }})
+          TOKEN=$(gcloud auth print-identity-token --audiences=${{ steps.get_url.outputs.service_url }})
           RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "Authorization: Bearer $TOKEN" \
             "${{ steps.get_url.outputs.service_url }}/health")
