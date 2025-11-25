@@ -1,6 +1,8 @@
 telethon
 google-cloud-bigquery
 python-dotenv
-loguru 
+loguru
 arabic-reshaper
 python-bidi
+fastapi
+uvicorn
