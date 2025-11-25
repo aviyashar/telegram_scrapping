@@ -35,9 +35,12 @@ jobs:
         run: |
           gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
       - name: Download Telegram Session File from GCS
         run: |
-          gsutil cp gs://pwcnext-sandbox01-terraform-state/telegram-scraper/fetch_session.session .
+          gcloud storage cp gs://pwcnext-sandbox01-terraform-state/telegram-scraper/fetch_session.session .
 
       - name: Build and Push Docker Image
         id: build
