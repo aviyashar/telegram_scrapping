@@ -35,9 +35,9 @@ jobs:
         run: |
           gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
-      - name: Decode Telegram Session File
+      - name: Download Telegram Session File from GCS
         run: |
-          echo "${{ secrets.TELEGRAM_SESSION_BASE64 }}" | base64 -d > fetch_session.session
+          gsutil cp gs://pwcnext-sandbox01-terraform-state/telegram-scraper/fetch_session.session .
 
       - name: Build and Push Docker Image
         id: build
